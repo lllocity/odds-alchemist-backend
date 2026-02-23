@@ -1,3 +1,7 @@
 spring:
   application:
     name: backend
+
+google:
+  sheets:
+    spreadsheet-id: "1amhByutDOCMBbbOPTng5I8CYxO877d9crc4tOhFQ-0A"
