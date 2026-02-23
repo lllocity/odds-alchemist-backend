@@ -22,6 +22,11 @@ dependencies {
 	implementation("org.springframework.boot:spring-boot-starter-webmvc")
 	testImplementation("org.springframework.boot:spring-boot-starter-webmvc-test")
 	testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+
+	// Google Sheets API
+    implementation("com.google.api-client:google-api-client:2.4.0")
+    implementation("com.google.oauth-client:google-oauth-client-jetty:1.34.1")
+    implementation("com.google.apis:google-api-services-sheets:v4-rev20230815-2.0.0")
 }
 
 tasks.withType<Test> {
