@@ -1,4 +1,4 @@
-application-secret.yml
+application-secret.yaml
 
 ### GCP Service Account Key ###
 *.json
