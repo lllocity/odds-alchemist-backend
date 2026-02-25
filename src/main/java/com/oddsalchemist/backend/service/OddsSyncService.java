@@ -1,0 +1,73 @@
+package com.oddsalchemist.backend.service;
+
+import com.oddsalchemist.backend.dto.OddsData;
+import com.oddsalchemist.backend.parser.RaceOddsParser;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Service;
+
+import java.io.IOException;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Objects;
+
+@Service
+public class OddsSyncService {
+
+    private static final Logger logger = LoggerFactory.getLogger(OddsSyncService.class);
+    private static final DateTimeFormatter TIMESTAMP_FORMATTER = DateTimeFormatter.ofPattern("yyyy/MM/dd HH:mm:ss");
+
+    private final OddsScrapingService scrapingService;
+    private final RaceOddsParser parser;
+    private final GoogleSheetsService sheetsService;
+
+    public OddsSyncService(OddsScrapingService scrapingService, RaceOddsParser parser, GoogleSheetsService sheetsService) {
+        this.scrapingService = scrapingService;
+        this.parser = parser;
+        this.sheetsService = sheetsService;
+    }
+
+    /**
+     * 対象URLからオッズを取得し、スプレッドシートへ追記します。
+     */
+    public void fetchAndSaveOdds(String targetUrl, String range) throws IOException {
+        logger.info("Start fetching odds from URL: {}", targetUrl);
+
+        // 1. HTMLの取得
+        String html = scrapingService.fetchHtml(targetUrl);
+
+        // 2. データのパース
+        List<OddsData> oddsList = parser.parse(html);
+
+        if (oddsList.isEmpty()) {
+            logger.warn("No odds data found. URL: {}", targetUrl);
+            return;
+        }
+
+        // 3. スプレッドシート用の2次元配列に変換
+        List<List<Object>> values = convertToSheetData(oddsList);
+
+        // 4. スプレッドシートへ書き込み
+        sheetsService.appendData(range, values);
+        logger.info("Successfully saved {} rows to spreadsheet.", values.size());
+    }
+
+    private List<List<Object>> convertToSheetData(List<OddsData> oddsList) {
+        List<List<Object>> values = new ArrayList<>();
+        String timestamp = LocalDateTime.now().format(TIMESTAMP_FORMATTER);
+
+        for (OddsData odds : oddsList) {
+            List<Object> row = new ArrayList<>();
+            row.add(timestamp);
+            row.add(odds.horseNumber());
+            row.add(odds.horseName());
+            row.add(Objects.toString(odds.winOdds(), ""));
+            row.add(Objects.toString(odds.placeOddsMin(), ""));
+            row.add(Objects.toString(odds.placeOddsMax(), ""));
+            values.add(row);
+        }
+        return values;
+    }
+}
