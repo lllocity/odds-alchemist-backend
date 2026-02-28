@@ -11,91 +11,100 @@ import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 @Component
 public class RaceOddsParser {
 
     private static final Logger logger = LoggerFactory.getLogger(RaceOddsParser.class);
 
+    // 馬番: 1〜2桁の整数のみ（1〜18）
+    private static final Pattern HORSE_NUMBER_PATTERN = Pattern.compile("^\\d{1,2}$");
+    // 単勝オッズ: "5.4" 形式
+    private static final Pattern WIN_ODDS_PATTERN = Pattern.compile("^\\d+\\.\\d+$");
+    // 複勝オッズ: "1.2 - 1.5" または "1.2-1.5" 形式（キャプチャグループで値を取得）
+    private static final Pattern PLACE_ODDS_PATTERN = Pattern.compile("(\\d+\\.\\d+)\\s*-\\s*(\\d+\\.\\d+)");
+
     public List<OddsData> parse(String html) {
         List<OddsData> oddsList = new ArrayList<>();
         Document doc = Jsoup.parse(html);
-
-        // スポナビのすべての行を取得
         Elements rows = doc.select("tr");
 
         for (Element row : rows) {
             try {
-                Elements cells = row.select("td");
-                if (cells.size() < 4) continue;
-
-                // 1. 馬番を探す（1〜18の数字が単独で含まれるセル）
-                String horseNumber = "";
-                int nameIndex = -1;
-                for (int i = 0; i < Math.min(cells.size(), 3); i++) {
-                    String text = cells.get(i).text().trim();
-                    if (text.matches("\\d+")) {
-                        horseNumber = text;
-                        nameIndex = i + 1; // 馬番の隣が馬名である可能性が高い
-                        break;
-                    }
-                }
-                if (horseNumber.isEmpty()) continue;
-
-                // 2. 馬名を取得
-                String horseName = cells.get(nameIndex).text().trim();
-                // 馬名にリンクがある場合は、リンクのテキストを優先
-                Element nameLink = cells.get(nameIndex).selectFirst("a");
-                if (nameLink != null) horseName = nameLink.text().trim();
-
-                // 3. オッズを「数値.数値」のパターンで探す
-                Double winOdds = null;
-                Double placeMin = null;
-                Double placeMax = null;
-
-                for (Element cell : cells) {
-                    String text = cell.text().trim();
-                    // 単勝オッズ (例: 5.4)
-                    if (text.matches("^\\d+\\.\\d+$")) {
-                        if (winOdds == null) winOdds = parseDouble(text);
-                    } 
-                    // 複勝オッズ (例: 1.2-1.5 や 1.2 - 1.5)
-                    else if (text.contains("-") && text.matches(".*\\d+\\.\\d+.*")) {
-                        Double[] p = parsePlace(text);
-                        if (p[0] != null) {
-                            placeMin = p[0];
-                            placeMax = p[1];
-                        }
-                    }
-                }
-
-                // 最低限、馬番と単勝オッズがあればリストに追加
-                if (!horseNumber.isEmpty() && winOdds != null) {
-                    oddsList.add(new OddsData(horseNumber, horseName, winOdds, placeMin, placeMax));
+                OddsData data = parseRow(row);
+                if (data != null) {
+                    oddsList.add(data);
                 }
             } catch (Exception e) {
-                // スキップ
+                logger.warn("行のパースに失敗しました。スキップします: {}", e.getMessage());
             }
         }
 
-        logger.info("Parse complete. Found {} valid horse rows. Total scanned: {}", oddsList.size(), rows.size());
+        logger.info("パース完了: 有効な馬データ {}件 / スキャン総行数 {}行", oddsList.size(), rows.size());
         return oddsList;
+    }
+
+    private OddsData parseRow(Element row) {
+        Elements cells = row.select("td");
+        if (cells.size() < 2) return null;
+
+        // 馬番を最初の3セル内から探す（1〜2桁の整数セル）
+        String horseNumber = null;
+        int horseNumberIndex = -1;
+        for (int i = 0; i < Math.min(cells.size(), 3); i++) {
+            String text = cells.get(i).text().trim();
+            if (HORSE_NUMBER_PATTERN.matcher(text).matches()) {
+                horseNumber = text;
+                horseNumberIndex = i;
+                break;
+            }
+        }
+        if (horseNumber == null) return null;
+
+        // 馬番の隣のセルを馬名として取得（リンクがあればそのテキストを優先）
+        int nameIndex = horseNumberIndex + 1;
+        if (nameIndex >= cells.size()) return null;
+        Element nameCell = cells.get(nameIndex);
+        Element nameLink = nameCell.selectFirst("a");
+        String horseName = (nameLink != null ? nameLink.text() : nameCell.text()).trim();
+        if (horseName.isEmpty()) return null;
+
+        // 単勝・複勝オッズをパターンマッチで抽出
+        Double winOdds = null;
+        Double placeMin = null;
+        Double placeMax = null;
+
+        for (Element cell : cells) {
+            String text = cell.text().trim();
+
+            // 複勝オッズの判定を先に行う（"1.2-1.5" が単勝パターンにマッチしないよう）
+            if (placeMin == null) {
+                Matcher placeMatcher = PLACE_ODDS_PATTERN.matcher(text);
+                if (placeMatcher.find()) {
+                    placeMin = parseDouble(placeMatcher.group(1));
+                    placeMax = parseDouble(placeMatcher.group(2));
+                    continue;
+                }
+            }
+
+            // 単勝オッズ: "5.4" 形式のセル
+            if (winOdds == null && WIN_ODDS_PATTERN.matcher(text).matches()) {
+                winOdds = parseDouble(text);
+            }
+        }
+
+        // 馬番と馬名が揃っていれば、オッズが未定でも行を含める
+        return new OddsData(horseNumber, horseName, winOdds, placeMin, placeMax);
     }
 
     private Double parseDouble(String s) {
         try {
-            return Double.parseDouble(s.replaceAll("[^0-9.]", ""));
-        } catch (Exception e) {
+            return Double.parseDouble(s.trim());
+        } catch (NumberFormatException e) {
+            logger.warn("数値変換に失敗しました: '{}'", s);
             return null;
         }
-    }
-
-    private Double[] parsePlace(String s) {
-        Double[] res = new Double[]{null, null};
-        // 1.2-1.5 などを分割
-        String[] parts = s.split("-");
-        if (parts.length >= 1) res[0] = parseDouble(parts[0]);
-        if (parts.length >= 2) res[1] = parseDouble(parts[1]);
-        return res;
     }
 }
